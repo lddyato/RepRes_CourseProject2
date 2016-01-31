@@ -1,0 +1,341 @@
+---
+title: 'Reproducible Research: Assignment 2'
+author: "Jared Prins"
+date: "January 31, 2016"
+output:
+  pdf_document:
+    fig_caption: yes
+    keep_tex: yes
+  html_document:
+    fig_caption: yes
+    keep_md: yes
+---
+
+
+# Effects of Weather Events on the Population and Economy of the United States
+
+
+
+## Synopsis
+
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern.
+
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage.
+
+The goal of this analysis will answer two questions:
+
+1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+2. Across the United States, which types of events have the greatest economic consequences?
+
+
+
+## Environment Setup
+
+This analysis uses R and the following R libraries:
+
+```{r, echo=TRUE}
+library(knitr)
+library(lubridate)
+library(plyr)
+library(dplyr)
+library(ggplot2)
+```
+
+
+
+## Data Processing
+
+First the data is loaded and briefly explored, looking at total observations, the structure and then Event Types by year. The data is then subset based on this exploration. Next, the total damages are calculated.  This involves some recoding. The data is further subset to include only variables that would be helpful in the analysis.  The final steps involve some cleaning of the Event Types to simply analysis and interpretation of results.
+
+
+
+### Load Data
+
+Load the data and look at the structure.
+
+```{r, echo=TRUE, cache=TRUE}
+data_url <- "https://d396qusza40orc.cloudfront.net/repdata/data/StormData.csv.bz2"
+fname = "StormData.csv.bz2"
+
+if(!file.exists(fname))
+{
+  download.file(data_url, fname)
+}
+
+storm.raw <- read.csv(fname, stringsAsFactors = FALSE) 
+
+num_obs <- nrow(storm.raw)
+num_vars <- length(storm.raw)
+storm.raw.str <- str(storm.raw)
+```
+
+Total observations: `r num_obs`
+Total variables: `r num_vars`
+
+One of the key variables of interest includes the type of Weather Event (EVTYPE).  
+Some exploration of EVTYPE is warranted.
+
+
+
+### Explore event types by year
+
+```{r, echo=TRUE}
+storm.raw$END_DATE <- as.Date(storm.raw$BGN_DATE,"%m/%d/%Y %H:%M:%S")
+storm.raw$YEAR <- as.numeric(format(storm.raw$END_DATE,"%Y"))
+evtype_year <- aggregate(data=storm.raw, EVTYPE~YEAR, function(x) length(unique(x)) )
+evtype_year
+```
+
+The last 10 years of the data (2002 to 2011) show movement to a similar number of Event Types. An assumption is made that some consistency was brought to the weather event data collection mechanism.  Therefore this analysis will only concern itself with data from 2002 to 2011.
+
+Another reason for this is that weather patterns since 1950 (when the data was first collected) might have changed. The type of data and the way it was collected might have also changed in response to the needs at that time.  By doing an analysis on the entire data set, it becomes harder to interpret results.
+
+
+
+### Subset the data
+
+The data is subset to include only those events recorded between 2002 and 2011.
+
+```{r, echo=TRUE}
+storm.keep <- subset(storm.raw, YEAR > 2001)
+num_obs <- nrow(storm.keep)
+```
+
+The subset data includes`r num_obs` observations.
+
+Another variable of interest is property and crop damage costs (respectively, PROPDMG and CROPDMG.)
+
+
+
+### Calculate total damages
+
+Total Damage costs are calculated using PROPDMG, PROPDMGEXP, CROPDMG and CROPDMGEXP.
+The two *EXP variables indicate wether the damage costs are in the thousands, millions or billions of dollars. 
+
+```{r, echo=TRUE}
+unique(storm.keep$PROPDMGEXP)
+unique(storm.keep$CROPDMGEXP)
+```
+
+The unique values in PROPDMGEXP and CROPDMGEXP damage specify how to recode PROPDMG and CROPDMG dollar values.
+K = Thousands, M = Millions, B = Billions
+
+
+
+#### Recode the damage variables
+
+The following conversion table aids in understanding how recoding will take place.
+
+|value   |description   |numerical  representation |total zeros   |exponential equivelant   |
+|---|---|---|---|---|
+|B   |billion   |1,000,000,000   |9   |10^9   |
+|M   |million   |1,000,000   |6   |10^6   |
+|K   |thousand   |1,000   |3   |10^3   |
+
+If PROPDMGEXP is "B", then the damage cost will be PROPDMG * 10^9, etc.
+
+After recoding the damage variables, both PROP and CROP damages are totalled (TOTDMG).
+
+```{r, echo=TRUE}
+storm.keep$PROPEXP <- as.integer(revalue(storm.keep$PROPDMGEXP, c("B"=9, "M"=6, "K"=3)))
+storm.keep$CROPEXP <- as.integer(revalue(storm.keep$CROPDMGEXP, c("B"=9, "M"=6, "K"=3)))
+storm.keep$PROPEXP[is.na(storm.keep$PROPEXP)] <- 0
+storm.keep$CROPEXP[is.na(storm.keep$CROPEXP)] <- 0
+
+storm.keep$PROPVAL <- storm.keep$PROPDMG * 10 ^ storm.keep$PROPEXP
+storm.keep$CROPVAL <- storm.keep$CROPDMG * 10 ^ storm.keep$CROPEXP
+
+storm.keep$TOTDMG <- storm.keep$PROPVAL + storm.keep$CROPVAL
+```
+
+
+
+#### Only keep the variables needed for the analysis
+
+The data is now subset to include only those variables that are helpful for the remainder of the analysis.
+
+```{r, echo=TRUE}
+storm.keep2 <- subset(storm.keep, select=c("REFNUM", "EVTYPE", "STATE", "YEAR", 
+                                           "FATALITIES", "INJURIES", "TOTDMG"))
+
+```
+
+
+
+### Data Cleaning
+
+There is one last data cleaning step which involves EVTYPE. The variable EVTYPE is qualitative text data that is manually entered.  It is prone issues such as mispellings and subjective codifying.
+
+```{r, echo=TRUE}
+EventTypes <- sort(unique(storm.keep2$EVTYPE))
+EventTypes
+TotalEventTypes <- length(EventTypes)
+```
+
+There are `r TotalEventTypes` unique Event Types used between 2002-2011.  To aid analysis, Event Types are normalized to fewer types.
+
+
+
+#### Generalizing (Normalizing) Event Types
+
+To support this analysis, some generalizations will be made about the Weather Events.  
+
+A set of rules have been created and are applied to the data.  One challenge with this approach is the order in which these rules are applied.  Each Event Type can only be assigned a single term or concept.  For example, how would COLD/WIND CHILL be generalized? Should this be coded as COLD or WIND?  Subject Matter Expertise was used to guide the ordering of these rules.
+
+```{r, echo=TRUE}
+storm.keep2$EVTYPE <- gsub(".*TSTM.*", "THUNDERSTORM", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*SNOW.*", "SNOW", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*FLD.*", "FLOOD", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*SNOW.*", "SNOW", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*TIDE.*", "TIDE", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*WHIRL.*", "TORNADO", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*THUNDER.*", "THUNDERSTORM", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*WIND.*", "WIND", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*DUST.*", "DUST", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*WET.*", "WET", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*WARM.*", "HEAT", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*HEAT.*", "HEAT", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*ICE.*", "ICE", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*FOG.*", "FOG", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*DRY.*", "DRY", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*ICE.*", "ICE", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*SNOW.*", "SNOW", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*FREEZ.*", "FREEZE", storm.keep2$EVTYPE) 
+  #the missing E after FREEZE also captures FREEZING
+storm.keep2$EVTYPE <- gsub(".*SMOKE.*", "SMOKE", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*FUNNEL.*", "FUNNEL", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*SURF.*", "TIDE", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*HURRICANE.*", "HURRICANE", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*PRECIP.*", "RAIN", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*RAIN.*", "RAIN", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*HAIL.*", "HAIL", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*WATERSPOUT.*", "TORNADO", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*WINT.*", "COLD", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*STORM.*", "THUNDERSTORM", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*FIRE.*", "FIRE", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*LIGHTNING.*", "THUNDERSTORM", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*TORNADO.*", "TORNADO", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*FLOOD.*", "FLOOD", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*CURRENT.*", "TIDE", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*CHILL.*", "COLD", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*SEAS.*", "TIDE", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*COLD.*", "COLD", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*COOL.*", "COLD", storm.keep2$EVTYPE)
+storm.keep2$EVTYPE <- gsub(".*ASH.*", "VOLCANIC ASH", storm.keep2$EVTYPE)
+```
+
+
+```{r, echo=TRUE}
+EventTypes <- sort(unique(storm.keep2$EVTYPE))
+EventTypes
+TotalEventTypes <- length(EventTypes)
+```
+
+There are now only `r TotalEventTypes` unique Weather Event Types. This allows analysis and interpretation of results to be more managable and actionable.
+
+
+
+## Results
+
+The table below shows that the top 3 Weather Events comprise the majority of all reported weather events from 2002-2011.
+
+```{r, echo=TRUE}
+evtype_freq <- count(storm.keep2, EVTYPE, sort=TRUE) %>%
+               mutate(percentage=round(n/sum(n)*100, digits=2))
+prnt <- nrow(evtype_freq)
+print(evtype_freq, n=prnt)
+```
+
+
+
+*Figure 1 and 2 describe which types of events are most harmful with respect to population health across the United States.*
+
+### A look at Fatalaties across the US
+
+```{r, echo=TRUE, fig.cap="US Fatalaties from Weather Events (2002-2011)"}
+
+storm.fatalaties <- sort(tapply(storm.keep2$FATALITIES, storm.keep2$EVTYPE, sum), 
+                         decreasing = TRUE)
+
+fat_event <- as.vector(names(head(storm.fatalaties, 10)))
+fat_sum <- as.vector(head(storm.fatalaties, 10))
+df.storm.fatalaties <- data.frame(fat_event, fat_sum)
+
+plot.fatality <- ggplot(data = df.storm.fatalaties, 
+                        aes(x = fat_event, y = fat_sum)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  geom_bar(stat = "identity") + 
+  xlab("Weather Event Type") + 
+  ylab("Total Fatalities") + 
+  ggtitle("Top 10 Weather Events Causing Fatalaties in the US, 2002-2011")
+
+plot.fatality
+```
+
+Tornado's, Heat and Floods are the top causes of fatalities across the US from 2002 to 2011.
+
+
+
+### A look at Injuries across the US
+
+```{r, echo=TRUE, fig.cap="US Injuries from Weather Events (2002-2011)"}
+storm.injuries <- sort(tapply(storm.keep2$INJURIES, storm.keep2$EVTYPE, sum), 
+                       decreasing = TRUE)
+
+inj_event <- as.vector(names(head(storm.injuries, 10)))
+inj_sum <- as.vector(head(storm.injuries, 10))
+df.storm.injuries <- data.frame(inj_event,inj_sum )
+
+plot.injury <- ggplot(data = df.storm.injuries, 
+                      aes(x = inj_event, y = inj_sum)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  geom_bar(stat = "identity")  + 
+  xlab("Weather Event Type") + 
+  ylab("Total Injuries") + 
+  ggtitle("Top 10 Weather Events Causing Injuries in the US, 2002-2011")
+
+plot.injury
+```
+
+Tornado's are also the top cause of Injuries during 2002-2011.  Thunderstorms and Heat follow, but only by half the number of injuries each.
+
+
+
+*Figure 3 describes which types of .*
+
+### Damage Costs of Weather Events in the US (2002-2011)
+
+```{r, echo=TRUE, fig.cap="Weather events having the greatest economic costs across the United States (2002-2011)"}
+
+storm.damage <- storm.keep2 %>% 
+  group_by(EVTYPE) %>% 
+  summarise(TOTALDMG=sum(TOTDMG)/1000000) %>% 
+  arrange(desc(TOTALDMG))
+
+plot.storm.damage <- ggplot(data = storm.damage[1:10,], 
+                            aes(x = EVTYPE, y = TOTALDMG)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  geom_bar(stat = "identity")  + 
+  ylab("Total Damage (000,000's)") + 
+  xlab("Weather Event Type") + 
+  coord_flip() + 
+  ggtitle("Total Damage Costs by Weather Event Type across the US, 2002-2011")
+
+plot.storm.damage
+```
+
+Floods are by far the most expensive weather events in the decade following the turn of the century, costing the country nearly 150 billion.  The next most costly events (though only half that of Floods) are Hurricanes, closely followed by Thunderstorms.  
+
+
+
+## Closing Remarks
+It's important to recognize what we can and cannot control.  The risk of Tornado's and Huricane's are harder to mitigate. However, the response to floods and heat can help lesson injury, fatality and economic burden.  Heat has significant impact on population health, but very little impact on economic health (at least not directly).  Flood mitigation strategies are strongly encouraged as the Flood Weather Event is significant for _both_ population and economic health.
+
+
+
+
+
+
+
+
+
